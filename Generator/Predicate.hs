@@ -9,7 +9,18 @@ import Data.Profunctor
 import Test.QuickCheck
 
 class Profunctor p => Properties p where
+  -- | Inclusive range.
+  --
+  -- - Predicate: Assert that the input 'Int' is within the given range.
+  -- - Generator: Generate an 'Int' in the given range, with uniform distribution.
   inRange :: (Int, Int) -> p Int Int
+
+  -- | > bernoulli r  -- @0 < r < 1@
+  --
+  -- - Predicate: Pass through.
+  -- - Generator: Generate a boolean, 'True' with probability @r@, 'False' with
+  --   probability @1-r@.
+  bernoulli :: Double -> p Bool Bool
 
 newtype Predicate x a
   = Predicate { applyPredicate :: x -> Maybe a }
@@ -17,6 +28,9 @@ newtype Predicate x a
 
 predicate :: (a -> Bool) -> Predicate a a
 predicate f = Predicate $ \a -> guard (f a) $> a
+
+true :: Predicate a a
+true = Predicate (\a -> Just a)
 
 instance Profunctor Predicate where
   rmap = fmap
@@ -37,6 +51,7 @@ instance Monad (Predicate a) where
 
 instance Properties Predicate where
   inRange (inf, sup) = predicate (\a -> inf <= a && a <= sup)
+  bernoulli _ = true
 
 newtype Generator x a
   = Generator { runGenerator :: Gen (Maybe a) }
@@ -66,3 +81,6 @@ instance Monad (Generator x) where
 
 instance Properties Generator where
   inRange (inf, sup) = generator (choose (inf, sup))
+  bernoulli p = generator (do
+    x <- choose (0, 1)
+    return (x < p))
