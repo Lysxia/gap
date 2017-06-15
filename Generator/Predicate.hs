@@ -22,6 +22,12 @@ class Profunctor p => Properties p where
   --   probability @1-r@.
   bernoulli :: Double -> p Bool Bool
 
+  -- | > nonNegative r  -- @0 < r < 1@
+  --
+  -- - Predicate: Non-negative integers (@>= 0@).
+  -- - Generator: Geometric distribution.
+  nonNegative :: Double -> p Int Int
+
 newtype Predicate x a
   = Predicate { applyPredicate :: x -> Maybe a }
   deriving Functor
@@ -52,6 +58,7 @@ instance Monad (Predicate a) where
 instance Properties Predicate where
   inRange (inf, sup) = predicate (\a -> inf <= a && a <= sup)
   bernoulli _ = true
+  nonNegative _ = predicate (>= 0)
 
 newtype Generator x a
   = Generator { runGenerator :: Gen (Maybe a) }
@@ -84,3 +91,11 @@ instance Properties Generator where
   bernoulli p = generator (do
     x <- choose (0, 1)
     return (x < p))
+  nonNegative p = generator (g 0)
+    where
+      g n = do
+        x <- choose (0, 1)
+        if x < p then
+          return n
+        else
+          g $! n+1
