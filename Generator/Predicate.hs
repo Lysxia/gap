@@ -28,6 +28,12 @@ class Profunctor p => Properties p where
   -- - Generator: Geometric distribution.
   nonNegative :: Double -> p Int Int
 
+  -- | Finite set.
+  --
+  -- - Predicate: Unwrap a @Just@. Fail on @Nothing@.
+  -- - Generator: Choose an element with probability proportional to its weight.
+  finite :: [(Int, a)] -> p (Maybe a) a
+
 newtype Predicate x a
   = Predicate { applyPredicate :: x -> Maybe a }
   deriving Functor
@@ -59,6 +65,7 @@ instance Properties Predicate where
   inRange (inf, sup) = predicate (\a -> inf <= a && a <= sup)
   bernoulli _ = true
   nonNegative _ = predicate (>= 0)
+  finite _ = Predicate id
 
 newtype Generator x a
   = Generator { runGenerator :: Gen (Maybe a) }
@@ -99,3 +106,4 @@ instance Properties Generator where
           return n
         else
           g $! n+1
+  finite = Generator . frequency . (fmap . fmap) (pure . pure)
