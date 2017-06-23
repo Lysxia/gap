@@ -5,6 +5,7 @@ module Generator.Predicate where
 import Control.Applicative
 import Control.Monad
 import Data.Functor
+import Data.Maybe
 import Data.Profunctor
 import Test.QuickCheck
 
@@ -22,6 +23,13 @@ class Profunctor p => Properties p where
   --   probability @1-r@.
   bernoulli :: Double -> p Bool Bool
 
+  -- | > integer r  -- @0 < r < 1@
+  --
+  -- - Predicate: Pass through.
+  -- - Generator: Geometric distribution then
+  --   @\n -> if even n then n `div` 2 else (-n) `div` 2@.
+  integer :: Double -> p Int Int
+
   -- | > nonNegative r  -- @0 < r < 1@
   --
   -- - Predicate: Non-negative integers (@>= 0@).
@@ -35,8 +43,11 @@ class Profunctor p => Properties p where
   finite :: [(Int, a)] -> p (Maybe a) a
 
 newtype Predicate x a
-  = Predicate { applyPredicate :: x -> Maybe a }
+  = Predicate { runPredicate :: x -> Maybe a }
   deriving Functor
+
+applyPredicate :: Predicate x a -> x -> Bool
+applyPredicate p = isJust . runPredicate p
 
 predicate :: (a -> Bool) -> Predicate a a
 predicate f = Predicate $ \a -> guard (f a) $> a
@@ -59,11 +70,12 @@ instance Alternative (Predicate x) where
 instance Monad (Predicate a) where
   Predicate pa >>= k = Predicate (\x -> do
     a <- pa x
-    applyPredicate (k a) x)
+    runPredicate (k a) x)
 
 instance Properties Predicate where
   inRange (inf, sup) = predicate (\a -> inf <= a && a <= sup)
   bernoulli _ = true
+  integer _ = true
   nonNegative _ = predicate (>= 0)
   finite _ = Predicate id
 
@@ -98,7 +110,18 @@ instance Properties Generator where
   bernoulli p = generator (do
     x <- choose (0, 1)
     return (x < p))
-  nonNegative p = generator (g 0)
+  integer p = generator (do
+    x <- geometric p
+    return $
+      if even x then
+        x `div` 2
+      else
+        (-x) `div` 2)
+  nonNegative p = generator (geometric p)
+  finite = Generator . frequency . (fmap . fmap) (pure . pure)
+
+geometric :: Double -> Gen Int
+geometric p = g 0
     where
       g n = do
         x <- choose (0, 1)
@@ -106,4 +129,3 @@ instance Properties Generator where
           return n
         else
           g $! n+1
-  finite = Generator . frequency . (fmap . fmap) (pure . pure)
