@@ -1,10 +1,16 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE TypeApplications #-}
 
 module Expr where
 
 import Control.Applicative
+import Data.Foldable
+import Data.Maybe
+import GHC.Generics
+
 import Test.QuickCheck
 import Generator.Predicate
 import Profunctor.Monad
@@ -18,7 +24,7 @@ data Expr
   | Not Expr
   | And Expr Expr
   | Var Var
-  deriving Show
+  deriving (Generic, Show)
 
 type Var = Int
 
@@ -57,95 +63,143 @@ typeOf e = case e of
   Var _ -> return TInt
 
 genInt :: Gen Expr
-genInt = oneof
-  [ If <$> genBool <*> genInt <*> genInt
-  , Plus <$> genInt <*> genInt
-  , CInt <$> arbitrary
+genInt = sized $ \n -> oneof $
+  [ CInt <$> arbitrary
   , Var <$> arbitrary
-  ]
+  ] ++ if n == 0 then
+    []
+  else resize (n - 1) <$>
+    [ If <$> genBool <*> genInt <*> genInt
+    , Plus <$> genInt <*> genInt
+    ]
 
 genBool :: Gen Expr
-genBool = oneof
-  [ If <$> genBool <*> genBool <*> genBool
-  , CBool <$> arbitrary
-  , Equal <$> genInt <*> genInt
-  , Not <$> genBool
-  , And <$> genBool <*> genBool
-  ]
+genBool = sized $ \n -> oneof $
+  [ CBool <$> arbitrary
+  ] ++ if n == 0 then
+    []
+  else resize (n - 1) <$>
+    [ If <$> genBool <*> genBool <*> genBool
+    , Equal <$> genInt <*> genInt
+    , Not <$> genBool
+    , And <$> genBool <*> genBool
+    ]
 
 genExpr :: Type -> Gen Expr
-genExpr t = oneof $
-  [ If <$> genExpr TBool <*> genExpr t <*> genExpr t ] ++
+genExpr t = sized $ \n -> oneof $
+  [ If <$> genExpr TBool <*> genExpr t <*> genExpr t | n > 0 ] ++
   case t of
     TBool ->
       [ CBool <$> arbitrary
-      , Equal <$> genExpr TInt <*> genExpr TInt
-      , Not <$> genExpr TBool
-      , And <$> genExpr TBool <*> genExpr TBool
-      ]
+      ] ++ if n == 0 then
+        []
+      else resize (n - 1) <$>
+        [ Equal <$> genExpr TInt <*> genExpr TInt
+        , Not <$> genExpr TBool
+        , And <$> genExpr TBool <*> genExpr TBool
+        ]
     TInt ->
-      [ Plus <$> genExpr TInt <*> genExpr TInt
-      , CInt <$> arbitrary
-      , Var <$> arbitrary
-      ]
+      [ CInt <$> arbitrary
+      , Var <$> getPositive <$> arbitrary
+      ] ++ if n == 0 then
+        []
+      else resize (n - 1) <$>
+        [ Plus <$> genExpr TInt <*> genExpr TInt
+        ]
 
 type Pro p = (Properties p, Monad1 p, Alternative1 p)
 
-gapExpr :: Pro p => Type -> J p Expr
-gapExpr t = with' @Monad $ do
-  root <- Just =. finite roots
-  case root of
-    If{} -> do
-      e0 <- cond =. gapExpr TBool
-      e1 <- branch1 =. gapExpr t
-      e2 <- branch2 =. gapExpr t
-      return (If e0 e1 e2)
-      where
-        cond (If e0 _ _) = e0
-        branch1 (If _ e1 _) = e1
-        branch2 (If _ _ e2) = e2
-    Plus{} | TInt <- t -> do
-      e1 <- operand1 =. gapExpr TInt
-      e2 <- operand2 =. gapExpr TInt
-      return (Plus e1 e2)
-      where
-        operand1 (Plus e1 _) = e1
-        operand2 (Plus _ e2) = e2
-    CInt{} | TInt <- t -> do
-      n <- unCInt =. nonNegative 0.5
-      return (CInt n)
-      where
-        unCInt (CInt n) = n
-    Var{} | TInt <- t -> do
-      v <- unVar =. nonNegative 0.8
-      return (Var v)
-      where
-        unVar (Var v) = v
-    CBool{} | TBool <- t -> do
-      b <- unCBool =. bernoulli 0.5
-      return (CBool b)
-      where
-        unCBool (CBool b) = b
-    Equal{} | TBool <- t -> do
-      e1 <- operand1 =. gapExpr TInt
-      e2 <- operand2 =. gapExpr TInt
-      return (Equal e1 e2)
-      where
-        operand1 (Equal e1 _) = e1
-        operand2 (Equal _ e2) = e2
-    Not{} | TBool <- t -> do
-      e1 <- unNot =. gapExpr TBool
-      return (Not e1)
-      where
-        unNot (Not e1) = e1
-    And{} | TBool <- t -> do
-      e1 <- operand1 =. gapExpr TBool
-      e2 <- operand2 =. gapExpr TBool
-      return (And e1 e2)
-      where
-        operand1 (And e1 _) = e1
-        operand2 (And _ e2) = e2
+gapExpr :: (?size :: Int, Pro p) => Type -> J p Expr
+gapExpr t =
+  let
+    ?size = ?size - 1
+  in
+    with' @Monad $ do
+      root <- Just =. finite roots
+      case root of
+        If{} -> do
+          e0 <- cond =. gapExpr TBool
+          e1 <- branch1 =. gapExpr t
+          e2 <- branch2 =. gapExpr t
+          return (If e0 e1 e2)
+          where
+            cond (If e0 _ _) = e0
+            branch1 (If _ e1 _) = e1
+            branch2 (If _ _ e2) = e2
+        Plus{} | TInt <- t -> do
+          e1 <- operand1 =. gapExpr TInt
+          e2 <- operand2 =. gapExpr TInt
+          return (Plus e1 e2)
+          where
+            operand1 (Plus e1 _) = e1
+            operand2 (Plus _ e2) = e2
+        CInt{} | TInt <- t -> do
+          n <- unCInt =. integer 0.5
+          return (CInt n)
+          where
+            unCInt (CInt n) = n
+        Var{} | TInt <- t -> do
+          v <- unVar =. nonNegative 0.8
+          return (Var v)
+          where
+            unVar (Var v) = v
+        CBool{} | TBool <- t -> do
+          b <- unCBool =. bernoulli 0.5
+          return (CBool b)
+          where
+            unCBool (CBool b) = b
+        Equal{} | TBool <- t -> do
+          e1 <- operand1 =. gapExpr TInt
+          e2 <- operand2 =. gapExpr TInt
+          return (Equal e1 e2)
+          where
+            operand1 (Equal e1 _) = e1
+            operand2 (Equal _ e2) = e2
+        Not{} | TBool <- t -> do
+          e1 <- unNot =. gapExpr TBool
+          return (Not e1)
+          where
+            unNot (Not e1) = e1
+        And{} | TBool <- t -> do
+          e1 <- operand1 =. gapExpr TBool
+          e2 <- operand2 =. gapExpr TBool
+          return (And e1 e2)
+          where
+            operand1 (And e1 _) = e1
+            operand2 (And _ e2) = e2
+        _ -> withAlternative empty
   where
     roots = case t of
+      TInt | ?size == 0 -> [(1, CInt{}), (1, Var{})]
+      TBool | ?size == 0 -> [(1, CBool{})]
       TInt -> [(1, If{}), (1, Plus{}), (1, CInt{}), (1, Var{})]
       TBool -> [(1, If{}), (1, CBool{}), (1, Equal{}), (1, Not{}), (1, And{})]
+
+-- Type preserving shrink.
+shrinkExpr e = case e of
+  If _ e1 e2 -> [e1, e2]
+  Plus e1 e2 -> [e1, e2]
+  Not e -> [e]
+  And e1 e2 -> [e1, e2]
+  _ -> []
+
+main = do
+  let args = stdArgs{maxSize=1000, maxSuccess=1000}
+  for_ [TInt, TBool] $ \t -> do
+    quickCheckWith args $
+      forAllShrink
+        (logSize $ sized $ \n -> let ?size = n in runGenerator (gapExpr t))
+        (\(Just e) -> Just <$> shrinkExpr e)
+        $ \e ->
+          case e of
+            Nothing -> discard
+            Just e -> typeOf e === pure t
+    quickCheckWith args $
+      forAllShrink
+        (logSize $ genExpr t)
+        shrinkExpr
+        $ \e ->
+          let ?size = -1 in applyPredicate (gapExpr t) e
+
+logSize :: Gen a -> Gen a
+logSize g = sized $ \n -> resize (round (log (fromIntegral (n+1)))) g
