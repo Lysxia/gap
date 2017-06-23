@@ -2,7 +2,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImplicitParams #-}
-{-# LANGUAGE TypeApplications #-}
 
 {-# OPTIONS -Wno-missing-fields -Wno-missing-methods #-}
 
@@ -116,7 +115,7 @@ gapExpr t =
   let
     ?size = ?size - 1
   in
-    with' @Monad $ do
+    withMonad $ do
       root <- Just =. finite roots
       case root of
         If{} -> do
