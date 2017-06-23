@@ -4,6 +4,8 @@
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE TypeApplications #-}
 
+{-# OPTIONS -Wno-missing-fields -Wno-missing-methods #-}
+
 module Expr where
 
 import Control.Applicative
@@ -16,14 +18,14 @@ import Generator.Predicate
 import Profunctor.Monad
 
 data Expr
-  = If Expr Expr Expr
-  | Plus Expr Expr
-  | CInt Int
-  | CBool Bool
-  | Equal Expr Expr
-  | Not Expr
-  | And Expr Expr
-  | Var Var
+  = If { cond :: Expr, branch1 :: Expr, branch2 :: Expr}
+  | Plus { operand1 :: Expr, operand2 :: Expr }
+  | Equal { operand1 :: Expr, operand2 :: Expr }
+  | And { operand1 :: Expr, operand2 :: Expr }
+  | Not { unNot :: Expr }
+  | Var { unVar :: Var }
+  | CInt { unCInt :: Int }
+  | CBool { unCBool :: Bool }
   deriving (Generic, Show)
 
 type Var = Int
@@ -46,26 +48,26 @@ typeOf e = case e of
     [t1, t2] <- traverse typeOf [e1, e2]
     assert (t1 == TInt && t2 == TInt) "Int addition"
     return TInt
-  CInt _ -> return TInt
-  CBool _ -> return TBool
   Equal e1 e2 -> do
     [t1, t2] <- traverse typeOf [e1, e2]
     assert (t1 == TInt && t2 == TInt) "Compare Int"
-    return TBool
-  Not e1 -> do
-    t1 <- typeOf e1
-    assert (t1 == TBool) "Not Bool"
     return TBool
   And e1 e2 -> do
     [t1, t2] <- traverse typeOf [e1, e2]
     assert (t1 == TBool && t2 == TBool) "And bool"
     return TBool
+  Not e1 -> do
+    t1 <- typeOf e1
+    assert (t1 == TBool) "Not Bool"
+    return TBool
   Var _ -> return TInt
+  CInt _ -> return TInt
+  CBool _ -> return TBool
 
 genInt :: Gen Expr
 genInt = sized $ \n -> oneof $
-  [ CInt <$> arbitrary
-  , Var <$> arbitrary
+  [ Var <$> arbitrary
+  , CInt <$> arbitrary
   ] ++ if n == 0 then
     []
   else resize (n - 1) <$>
@@ -81,8 +83,8 @@ genBool = sized $ \n -> oneof $
   else resize (n - 1) <$>
     [ If <$> genBool <*> genBool <*> genBool
     , Equal <$> genInt <*> genInt
-    , Not <$> genBool
     , And <$> genBool <*> genBool
+    , Not <$> genBool
     ]
 
 genExpr :: Type -> Gen Expr
@@ -95,12 +97,12 @@ genExpr t = sized $ \n -> oneof $
         []
       else resize (n - 1) <$>
         [ Equal <$> genExpr TInt <*> genExpr TInt
-        , Not <$> genExpr TBool
         , And <$> genExpr TBool <*> genExpr TBool
+        , Not <$> genExpr TBool
         ]
     TInt ->
-      [ CInt <$> arbitrary
-      , Var <$> getPositive <$> arbitrary
+      [ Var <$> getPositive <$> arbitrary
+      , CInt <$> arbitrary
       ] ++ if n == 0 then
         []
       else resize (n - 1) <$>
@@ -122,51 +124,30 @@ gapExpr t =
           e1 <- branch1 =. gapExpr t
           e2 <- branch2 =. gapExpr t
           return (If e0 e1 e2)
-          where
-            cond (If e0 _ _) = e0
-            branch1 (If _ e1 _) = e1
-            branch2 (If _ _ e2) = e2
         Plus{} | TInt <- t -> do
           e1 <- operand1 =. gapExpr TInt
           e2 <- operand2 =. gapExpr TInt
           return (Plus e1 e2)
-          where
-            operand1 (Plus e1 _) = e1
-            operand2 (Plus _ e2) = e2
-        CInt{} | TInt <- t -> do
-          n <- unCInt =. integer 0.5
-          return (CInt n)
-          where
-            unCInt (CInt n) = n
-        Var{} | TInt <- t -> do
-          v <- unVar =. nonNegative 0.8
-          return (Var v)
-          where
-            unVar (Var v) = v
-        CBool{} | TBool <- t -> do
-          b <- unCBool =. bernoulli 0.5
-          return (CBool b)
-          where
-            unCBool (CBool b) = b
         Equal{} | TBool <- t -> do
           e1 <- operand1 =. gapExpr TInt
           e2 <- operand2 =. gapExpr TInt
           return (Equal e1 e2)
-          where
-            operand1 (Equal e1 _) = e1
-            operand2 (Equal _ e2) = e2
-        Not{} | TBool <- t -> do
-          e1 <- unNot =. gapExpr TBool
-          return (Not e1)
-          where
-            unNot (Not e1) = e1
         And{} | TBool <- t -> do
           e1 <- operand1 =. gapExpr TBool
           e2 <- operand2 =. gapExpr TBool
           return (And e1 e2)
-          where
-            operand1 (And e1 _) = e1
-            operand2 (And _ e2) = e2
+        Not{} | TBool <- t -> do
+          e1 <- unNot =. gapExpr TBool
+          return (Not e1)
+        Var{} | TInt <- t -> do
+          v <- unVar =. nonNegative 0.8
+          return (Var v)
+        CInt{} | TInt <- t -> do
+          n <- unCInt =. integer 0.5
+          return (CInt n)
+        CBool{} | TBool <- t -> do
+          b <- unCBool =. bernoulli 0.5
+          return (CBool b)
         _ -> withAlternative empty
   where
     roots = case t of
@@ -176,12 +157,17 @@ gapExpr t =
       TBool -> [(1, If{}), (1, CBool{}), (1, Equal{}), (1, Not{}), (1, And{})]
 
 -- Type preserving shrink.
-shrinkExpr e = case e of
+shrinkExpr e = shrinkExpr' e ++ recursivelyShrink e
+
+shrinkExpr' e = case e of
   If _ e1 e2 -> [e1, e2]
   Plus e1 e2 -> [e1, e2]
-  Not e -> [e]
   And e1 e2 -> [e1, e2]
+  Not e -> [e]
   _ -> []
+
+instance Arbitrary Expr where
+  shrink = shrinkExpr
 
 main = do
   let args = stdArgs{maxSize=1000, maxSuccess=1000}
