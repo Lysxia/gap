@@ -66,7 +66,7 @@ typeOf e = case e of
 
 genInt :: Gen Expr
 genInt = sized $ \n -> oneof $
-  [ Var <$> arbitrary
+  [ Var <$> getPositive <$> arbitrary
   , CInt <$> arbitrary
   ] ++ if n == 0 then
     []
