@@ -129,3 +129,58 @@ geometric p = g 0
           return n
         else
           g $! n+1
+
+newtype Shrinker x a
+  = Shrinker { runShrinker :: x -> [a] }
+  deriving Functor
+
+shrinks :: (a -> [a]) -> Shrinker a a
+shrinks s = Shrinker (\a -> a : s a)
+
+instance Profunctor Shrinker where
+  rmap = fmap
+  lmap f (Shrinker s) = Shrinker (s . f)
+
+instance Applicative (Shrinker x) where
+  pure a = Shrinker (\_ -> [a])
+  Shrinker sf <*> Shrinker sa = Shrinker (\x ->
+    case (sf x, sa x) of
+      (f : fs, a : as) -> f a : fmap ($ a) fs ++ fmap f as
+      _ -> [])
+
+instance Alternative (Shrinker x) where
+  empty = Shrinker (\_ -> [])
+  Shrinker sa <|> Shrinker sa' = Shrinker (\x ->
+    case sa x of
+      [] -> sa' x
+      as -> as)
+
+instance Monad (Shrinker x) where
+  Shrinker sa >>= k = Shrinker (\x ->
+    case sa x of
+      [] -> []
+      a : as -> case runShrinker (k a) x of
+        [] -> []
+        bs -> bs ++ do
+          a <- as
+          take 1 (runShrinker (k a) x))
+
+instance Properties Shrinker where
+  inRange (inf, sup) = Shrinker (\a ->
+    if a < inf || a > sup then
+      []
+    else if a == inf || a == sup then
+      a : []
+    else
+      a : [(inf + a) `div` 2, (sup + a) `div` 2 + 1, a - 1, a + 1])
+  bernoulli _ = shrinks (\a -> if a then [False] else [])
+  integer _ = shrinks (\a -> case compare a 0 of
+    GT -> [a `quot` 2, a - 1]
+    EQ -> []
+    LT -> [a `quot` 2, a + 1])
+  nonNegative _ = Shrinker (\a ->
+    if a < 0 then
+      []
+    else
+      a : [a `div` 2, a - 1])
+  finite _ = Shrinker maybeToList
