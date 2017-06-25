@@ -1,5 +1,30 @@
 {-# LANGUAGE DeriveFunctor #-}
 
+{- |
+
+For a generator @g :: Gen a@ and a predicate @p :: a -> Bool@.
+
+We write @x ∈ g@ if @g@ generates @x@ with positive probability.
+
+@
+p x = True   ==>   x ∈ g   (completeness of g wrt. p)
+x ∈ g   ==>   p x = True   (soundness)
+@
+
+We have an abstract type @p :: * -> * -> *@, whose values @g :: p x a@
+represent a generator @runGenerator g :: Gen a@ and a partial function
+@runPredicate g :: x -> Maybe a@ (which corresponds to a predicate).
+
+Properties we want to have are:
+
+1. If @runPredicate g x = Just a@, then @a ∈ runGenerator g@.
+2. If @a ∈ runGenerator g@, then there exists @x@ such that @runPredicate g x = Just a@.
+3. If @runPredicate g x = Just a@, then @x = a@.
+
+(1+3) describes completeness, (2+3) soundness.
+
+-}
+
 module Generator.Predicate where
 
 import Control.Applicative
